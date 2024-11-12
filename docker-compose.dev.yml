@@ -1,0 +1,52 @@
+version: '3.7'
+
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "127.0.0.1:5050:80"
+    volumes:
+      - ./docker/nginx:/etc/nginx/conf.d:ro
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      - sd-api
+    networks:
+      - sd-network
+
+  sd-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    expose:
+      - "5000"
+    volumes:
+      - ./app:/src/app:ro
+      - ./generated_images:/src/generated_images
+      - ./logs/sd-api:/src/logs
+      - model_cache:/root/.cache/huggingface
+    environment:
+      - MODEL_ID=stabilityai/stable-diffusion-3.5-large
+      - NUM_WORKERS=1
+      - PYTORCH_ENABLE_MPS_FALLBACK=1
+      - LOG_LEVEL=debug
+      - PYTHONPATH=/src
+      - TRANSFORMERS_CACHE=/root/.cache/huggingface
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN}
+      - PYTHONUNBUFFERED=1
+    networks:
+      - sd-network
+    restart: unless-stopped
+    # Start with shell to debug
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "pip list &&
+       python -c 'import torch; print(f\"PyTorch version: {torch.__version__}\"); print(f\"CUDA available: {torch.cuda.is_available()}\"); print(f\"MPS available: {torch.backends.mps.is_available()}\")' &&
+       gunicorn --bind 0.0.0.0:5000 --timeout 600 --workers 1 --threads 4 --log-level debug --capture-output app.app:app"
+
+networks:
+  sd-network:
+    driver: bridge
+
+volumes:
+  model_cache:

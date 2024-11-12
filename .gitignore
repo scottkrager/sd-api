@@ -1,0 +1,130 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.env
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs and databases
+*.log
+logs/
+*.sqlite
+*.db
+
+# Generated content
+generated_images/
+model_cache/
+
+# Hugging Face and Model Cache
+.model_cache/
+.cache/
+.model_cache.lock
+.lock
+*.lock
+hub/
+diffusers_cache/
+transformers_cache/
+.huggingface/
+.torch/
+*.bin
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+
+# Docker volumes and data
+data/
+grafana_data/
+prometheus_data/
+.docker/
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+*.crt
+*.key
+*.pem
+huggingface/
+.cache/
+.huggingface/
+temp/
+tmp/
+
+# Local development files
+docker-compose.override.yml
+*.local.yml
+*.local.yaml
+*.local.env
+
+# Backup files
+*.backup
+*.bak
+*~
+*.old
+*.orig
+
+# Test coverage
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Stable Diffusion specific
+*.ckpt
+*.safetensors
+diffusers-cache/
+*.bin
+weights/
+models/
+
+# Token files and auth
+token
+token.txt
+*.token
+auth.json
+
+# Temporary directories that might be created during model downloads
+tmp_*/
+downloads_*/
+.tmp/

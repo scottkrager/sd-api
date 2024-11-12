@@ -1,0 +1,45 @@
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./docker/nginx:/etc/nginx/conf.d
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      - sd-api
+    networks:
+      - sd-network
+
+  sd-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.prod
+    expose:
+      - "5000"
+    volumes:
+      - ./generated_images:/app/generated_images
+    environment:
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY}
+      - GPU_TYPE=A4000  # Or your chosen GPU type
+      - COST_ALERT_THRESHOLD=10
+      - MAX_IDLE_TIME=3600
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - sd-network
+    restart: unless-stopped
+
+
+networks:
+  sd-network:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data:
