@@ -14,7 +14,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-MODEL_ID = "runwayml/stable-diffusion-v1-5"
+# MODEL_ID = "runwayml/stable-diffusion-v1-5"
+# MODEL_ID = os.getenv("MODEL_ID", MODEL_ID)
+MODEL_ID = "stabilityai/stable-diffusion-3.5-large"
 CACHE_DIR = os.path.expanduser("~/.cache/huggingface/hub")
 CONCURRENT_DOWNLOADS = 8
 

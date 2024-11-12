@@ -1,23 +1,31 @@
 # Project Documentation
-Generated on Mon Nov 11 17:02:52 PST 2024
+Generated on Mon Nov 11 18:44:56 PST 2024
 
 ## Project Structure
 ```
 .
 ├── app
-│   ├── __init__.py
 │   ├── app.py
 │   └── monitoring.py
 ├── cache-manager.sh
+├── clean-download.sh
 ├── config
 │   ├── grafana
+│   │   ├── dashboards
+│   │   │   └── sd-api-dashboard.json
 │   │   └── provisioning
+│   │       ├── alerting
 │   │       ├── dashboards
+│   │       │   ├── default.yaml
+│   │       │   └── sd-api-dashboard.json
+│   │       ├── datasources
 │   │       │   └── default.yaml
-│   │       └── datasources
-│   │           └── default.yaml
+│   │       ├── notifiers
+│   │       └── plugins
 │   └── prometheus
 │       └── prometheus.yml
+├── data
+│   └── grafana
 ├── docker
 │   ├── Dockerfile.dev
 │   ├── Dockerfile.prod
@@ -29,12 +37,16 @@ Generated on Mon Nov 11 17:02:52 PST 2024
 ├── download-model.sh
 ├── download_model.py
 ├── logs
-│   └── nginx
+│   ├── nginx
+│   └── sd-api
 ├── project_documentation.md
 ├── requirements.txt
-└── setup.sh
+├── resources
+│   └── valet.conf
+├── setup.sh
+└── verify-model.sh
 
-12 directories, 18 files
+20 directories, 22 files
 ```
 
 ## File Contents
@@ -46,9 +58,9 @@ Generated on Mon Nov 11 17:02:52 PST 2024
 # Create directory structure
 mkdir -p docker/nginx
 mkdir -p logs/nginx
-mkdir -p config/prometheus
-mkdir -p config/grafana/provisioning
 mkdir -p generated_images
+mkdir -p config/prometheus
+mkdir -p config/grafana/{dashboards,provisioning/{dashboards,datasources,plugins,notifiers,alerting}}
 
 # Create Prometheus config
 cat > config/prometheus/prometheus.yml << 'EOL'
@@ -66,21 +78,252 @@ scrape_configs:
       - targets: ['localhost:9090']
 EOL
 
+# Create Grafana dashboard provisioning config
+cat > config/grafana/provisioning/dashboards/default.yaml << 'EOL'
+apiVersion: 1
+
+providers:
+  - name: 'default'
+    orgId: 1
+    folder: ''
+    folderUid: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: true
+EOL
+
+# Create Grafana datasource config
+cat > config/grafana/provisioning/datasources/default.yaml << 'EOL'
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+EOL
+
+# Create default dashboard
+cat > config/grafana/dashboards/sd-api-dashboard.json << 'EOL'
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "Total Requests",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "sd_api_requests_total",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["stable-diffusion"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Stable Diffusion API Dashboard",
+  "uid": "stable-diffusion",
+  "version": 1
+}
+EOL
+
+# Create placeholder files for other Grafana directories
+touch config/grafana/provisioning/plugins/.gitkeep
+touch config/grafana/provisioning/notifiers/.gitkeep
+touch config/grafana/provisioning/alerting/.gitkeep
+
 # Set permissions
 chmod -R 755 config
 chmod -R 777 generated_images
 chmod -R 777 logs
+chmod -R 777 config/grafana
 
-# Create .env file
-cat > .env << 'EOL'
-HF_TOKEN=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
+# Create .env file if it doesn't exist
+if [ ! -f .env ]; then
+    cat > .env << 'EOL'
+HF_TOKEN=your_huggingface_token_here
 MODEL_ID=stabilityai/stable-diffusion-3.5-large
 NUM_WORKERS=1
 PYTORCH_ENABLE_MPS_FALLBACK=1
 LOG_LEVEL=debug
 EOL
+    echo "Created .env file. Please update HF_TOKEN with your Hugging Face token."
+fi
 
-echo "Setup complete! You can now run: docker-compose -f docker-compose.dev.yml up --build -d"```
+# Create empty directories for Grafana SQLite database
+mkdir -p data/grafana
+chmod -R 777 data/grafana
+
+echo "Setup complete! You can now run: docker compose -f docker-compose.dev.yml up --build"```
+
+### ./verify-model.sh
+```sh
+#!/bin/bash
+
+# Set variables
+CACHE_DIR=".cache/huggingface"
+
+# Create Python verification script
+cat > verify_script.py << 'EOL'
+import os
+from huggingface_hub import HfApi
+import logging
+from pathlib import Path
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def verify_model():
+    try:
+        model_id = "stabilityai/stable-diffusion-3.5-large"
+        cache_dir = os.getenv("HF_HOME", "/root/.cache/huggingface")
+        token = os.getenv("HF_TOKEN")
+        
+        if not token:
+            logger.error("HF_TOKEN environment variable is required")
+            return False
+
+        # Get list of required model files
+        api = HfApi()
+        files = api.list_repo_files(model_id, token=token)
+        
+        # Check local cache
+        cache_path = Path(cache_dir)
+        if not cache_path.exists():
+            logger.error(f"Cache directory {cache_dir} does not exist")
+            return False
+            
+        # Look for key model files
+        key_files = [
+            "model_index.json",
+            "v3-5-large/diffusion_pytorch_model.safetensors",
+            "v3-5-large/config.json"
+        ]
+        
+        missing_files = []
+        for file in key_files:
+            if not (cache_path / model_id / file).exists():
+                missing_files.append(file)
+        
+        if missing_files:
+            logger.error("Missing required files:")
+            for file in missing_files:
+                logger.error(f"  - {file}")
+            return False
+            
+        logger.info("All required model files found!")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error during verification: {str(e)}")
+        return False
+
+if __name__ == "__main__":
+    import sys
+    success = verify_model()
+    sys.exit(0 if success else 1)
+EOL
+
+# Verify HF_TOKEN is set
+if [ -z "${HF_TOKEN}" ]; then
+    echo "Error: HF_TOKEN environment variable is required"
+    echo "Please set it with: export HF_TOKEN=your_token_here"
+    exit 1
+fi
+
+echo "Starting model verification..."
+echo "Cache directory: $(pwd)/$CACHE_DIR"
+
+# Run the verification in a container
+docker run --rm \
+    -v $(pwd)/$CACHE_DIR:/root/.cache/huggingface \
+    -v $(pwd)/verify_script.py:/app/verify_script.py \
+    -e HF_HOME=/root/.cache/huggingface \
+    -e HF_TOKEN=${HF_TOKEN} \
+    python:3.10-slim \
+    bash -c "
+        cd /app && \
+        echo 'Installing requirements...' && \
+        pip install --no-cache-dir --quiet huggingface-hub && \
+        echo 'Starting verification...' && \
+        python3 verify_script.py
+    "
+
+# Cleanup the temporary script
+rm verify_script.py
+
+# Check verification result
+if [ $? -eq 0 ]; then
+    echo "Model verification successful!"
+    echo "Your model files appear to be complete and ready to use."
+else
+    echo "Model verification failed. You may need to re-download some files."
+fi```
 
 ### ./docker/Dockerfile.prod
 ```prod
@@ -117,8 +360,8 @@ CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--timeout", "300", "--workers", "1",
 
 ### ./docker/Dockerfile.dev
 ```dev
-# Use Python base image with CUDA support for production
-FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
+# Use Python base image
+FROM python:3.10-slim
 
 # Set working directory
 WORKDIR /src
@@ -128,19 +371,25 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     git \
     curl \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Install Python dependencies with checks
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir -r requirements.txt && \
+    pip check && \
+    pip list
 
 # Copy application code
 COPY app /src/app
 
-# Create directory for generated images
-RUN mkdir -p generated_images
+# Create necessary directories
+RUN mkdir -p /src/generated_images && \
+    mkdir -p /src/logs && \
+    chmod -R 777 /src/generated_images /src/logs
 
 # Set environment variables
 ENV MODEL_ID="stabilityai/stable-diffusion-3.5-large" \
@@ -149,35 +398,23 @@ ENV MODEL_ID="stabilityai/stable-diffusion-3.5-large" \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/src
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
-
-EXPOSE 5000
-
-# Run with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--timeout", "600", "--workers", "1", "--threads", "4", "--log-level", "debug", "app.app:app"]```
+EXPOSE 5000```
 
 ### ./docker/nginx/default.conf
 ```conf
 server {
-    listen 127.0.0.1:80;
-    server_name sd-api.test www.sd-api.test *.sd-api.test;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 127.0.0.1:443 ssl http2;
-    server_name sd-api.test www.sd-api.test *.sd-api.test;
-    root /;
-    charset utf-8;
+    listen 80;
+    server_name localhost;
+    
     client_max_body_size 512M;
     
-    ssl_certificate "/Users/scottkrager/.config/valet/Certificates/sd-api.test.crt";
-    ssl_certificate_key "/Users/scottkrager/.config/valet/Certificates/sd-api.test.key";
+    # Add CORS headers
+    add_header 'Access-Control-Allow-Origin' '*' always;
+    add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+    add_header 'Access-Control-Allow-Headers' 'DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization' always;
     
     location / {
-        proxy_pass http://127.0.0.1:8088;  # Updated to match new nginx port
+        proxy_pass http://sd-api:5000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -190,21 +427,28 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
+        
+        # Handle OPTIONS method for CORS
+        if ($request_method = 'OPTIONS') {
+            add_header 'Access-Control-Allow-Origin' '*';
+            add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS';
+            add_header 'Access-Control-Allow-Headers' 'DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization';
+            add_header 'Access-Control-Max-Age' 1728000;
+            add_header 'Content-Type' 'text/plain; charset=utf-8';
+            add_header 'Content-Length' 0;
+            return 204;
+        }
     }
     
     location /health {
-        proxy_pass http://127.0.0.1:8088/health;
+        proxy_pass http://sd-api:5000/health;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_read_timeout 10;
     }
     
-    access_log off;
-    error_log "/Users/scottkrager/.config/valet/Log/nginx-error.log";
-    
-    location ~ /\.ht {
-        deny all;
-    }
+    error_log  /var/log/nginx/error.log debug;
+    access_log /var/log/nginx/access.log;
 }```
 
 ### ./app/monitoring.py
@@ -330,37 +574,29 @@ class MonitoringService:
         os.system("shutdown now")
 ```
 
-### ./app/__init__.py
-```py
-```
-
 ### ./app/app.py
 ```py
 import os
 from flask import Flask, request, jsonify, send_file
-from diffusers import StableDiffusion3Pipeline, BitsAndBytesConfig, SD3Transformer2DModel
+from diffusers import StableDiffusionPipeline
 import torch
 from PIL import Image
 import io
 import uuid
 import time
-from app.monitoring import MonitoringService
 
 app = Flask(__name__)
-
-# Initialize the monitoring service
-monitor = MonitoringService()
 
 def get_device_and_dtype():
     if torch.backends.mps.is_available() and not os.getenv('FORCE_CPU', False):
         return "mps", torch.float16
     elif torch.cuda.is_available():
-        return "cuda", torch.bfloat16
+        return "cuda", torch.float32
     return "cpu", torch.float32
 
 # Initialize the model globally
 device, dtype = get_device_and_dtype()
-model_id = os.getenv('MODEL_ID', "stabilityai/stable-diffusion-3.5-large")
+model_id = os.getenv('MODEL_ID', "runwayml/stable-diffusion-v1-5")
 OUTPUT_DIR = "generated_images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -369,35 +605,13 @@ def load_model():
     try:
         app.logger.info(f"Loading model on device: {device} with dtype: {dtype}")
         
-        if device == "cuda":
-            # Use 4-bit quantization for CUDA devices to reduce VRAM usage
-            nf4_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch.bfloat16
-            )
-            
-            model_nf4 = SD3Transformer2DModel.from_pretrained(
-                model_id,
-                subfolder="transformer",
-                quantization_config=nf4_config,
-                torch_dtype=torch.bfloat16
-            )
-            
-            pipe = StableDiffusion3Pipeline.from_pretrained(
-                model_id,
-                transformer=model_nf4,
-                torch_dtype=torch.bfloat16
-            )
-            pipe.enable_model_cpu_offload()
-        else:
-            # For MPS (M1/M2 Mac) or CPU
-            pipe = StableDiffusion3Pipeline.from_pretrained(
-                model_id,
-                torch_dtype=dtype,
-                use_auth_token=os.getenv('HF_TOKEN')
-            )
-            pipe = pipe.to(device)
+        pipe = StableDiffusionPipeline.from_pretrained(
+            model_id,
+            torch_dtype=dtype,
+            use_auth_token=os.getenv('HF_TOKEN')
+        )
+        
+        pipe = pipe.to(device)
         
         # Enable memory efficient attention if available
         if hasattr(pipe, 'enable_attention_slicing'):
@@ -415,22 +629,6 @@ try:
 except Exception as e:
     app.logger.error(f"Failed to load model: {str(e)}")
     pipe = None
-
-@app.before_request
-def before_request():
-    """Record request timing"""
-    request.start_time = time.time()
-
-@app.after_request
-def after_request(response):
-    """Record request metrics"""
-    if hasattr(request, 'start_time'):
-        duration = time.time() - request.start_time
-        if request.endpoint:
-            monitor.record_request(request.endpoint)
-            if request.endpoint == 'generate_image':
-                monitor.record_generation_time(duration)
-    return response
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -454,8 +652,7 @@ def health_check():
         'model': model_id,
         'device': device,
         'memory_info': memory_info,
-        'request_info': request_info,
-        'uptime_seconds': time.time() - monitor.start_time
+        'request_info': request_info
     })
 
 @app.route('/generate', methods=['POST'])
@@ -470,13 +667,10 @@ def generate_image():
         if not prompt:
             return jsonify({'error': 'No prompt provided'}), 400
         
-        # Optional parameters with defaults for SD 3.5
+        # Optional parameters
         negative_prompt = data.get('negative_prompt', None)
-        num_inference_steps = int(data.get('num_inference_steps', 28))  # SD 3.5 default
-        guidance_scale = float(data.get('guidance_scale', 3.5))  # SD 3.5 default
-        width = int(data.get('width', 1024))  # SD 3.5 supports higher resolutions
-        height = int(data.get('height', 1024))
-        max_sequence_length = int(data.get('max_sequence_length', 512))  # SD 3.5 supports longer prompts
+        num_inference_steps = int(data.get('num_inference_steps', 50))
+        guidance_scale = float(data.get('guidance_scale', 7.5))
         
         app.logger.info(f"Generating image for prompt: {prompt}")
         generation_start = time.time()
@@ -487,15 +681,11 @@ def generate_image():
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                width=width,
-                height=height,
-                max_sequence_length=max_sequence_length
+                guidance_scale=guidance_scale
             ).images[0]
         
         generation_time = time.time() - generation_start
         app.logger.info(f"Image generated in {generation_time:.2f} seconds")
-        monitor.record_generation_time(generation_time)
         
         # Save the image
         filename = f"{uuid.uuid4()}.png"
@@ -531,32 +721,183 @@ datasources:
     access: proxy
     url: http://prometheus:9090
     isDefault: true
+    editable: false
 ```
+
+### ./config/grafana/provisioning/dashboards/sd-api-dashboard.json
+```json
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "Total Requests",
+      "type": "gauge"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["stable-diffusion"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Stable Diffusion API Dashboard",
+  "uid": "stable-diffusion",
+  "version": 1
+}```
 
 ### ./config/grafana/provisioning/dashboards/default.yaml
 ```yaml
-# grafana/provisioning/dashboards/default.yaml
 apiVersion: 1
 
 providers:
-  - name: 'Stable Diffusion API'
+  - name: 'default'
     orgId: 1
     folder: ''
+    folderUid: ''
     type: file
     disableDeletion: false
-    editable: true
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
     options:
       path: /etc/grafana/dashboards
+      foldersFromFilesStructure: true
+```
 
-# grafana/provisioning/datasources/default.yaml
-apiVersion: 1
-
-datasources:
-  - name: Prometheus
-    type: prometheus
-    access: proxy
-    url: http://prometheus:9090
-    isDefault: true```
+### ./config/grafana/dashboards/sd-api-dashboard.json
+```json
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "Total Requests",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "sd_api_requests_total",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["stable-diffusion"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Stable Diffusion API Dashboard",
+  "uid": "stable-diffusion",
+  "version": 1
+}
+```
 
 ### ./config/prometheus/prometheus.yml
 ```yml
@@ -573,6 +914,182 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 ```
+
+### ./resources/valet.conf
+```conf
+kserver {
+    listen 127.0.0.1:80;
+    server_name sd-api.test www.sd-api.test *.sd-api.test;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 127.0.0.1:443 ssl http2;
+    server_name sd-api.test www.sd-api.test *.sd-api.test;
+    root /;
+    charset utf-8;
+    client_max_body_size 512M;
+
+    ssl_certificate "/Users/scottkrager/.config/valet/Certificates/sd-api.test.crt";
+    ssl_certificate_key "/Users/scottkrager/.config/valet/Certificates/sd-api.test.key";
+
+    location / {
+        proxy_pass http://127.0.0.1:5050;  # Changed to match our Docker nginx port
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 300;
+        proxy_send_timeout 300;
+        proxy_read_timeout 300;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    location /health {
+        proxy_pass http://127.0.0.1:5050/health;  # Changed to match our Docker nginx port
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 10;
+    }
+
+    access_log off;
+    error_log "/Users/scottkrager/.config/valet/Log/nginx-error.log";
+
+    location ~ /\.ht {
+        deny all;
+    }
+}```
+
+### ./clean-download.sh
+```sh
+#!/bin/bash
+
+# Set variables
+CACHE_DIR=".cache/huggingface"
+MODEL_ID="stabilityai/stable-diffusion-3.5-large"
+
+echo "Cleaning up cache directory..."
+rm -rf "$CACHE_DIR/hub/models--stabilityai--stable-diffusion-3.5-large"
+
+# Create Python download script
+cat > download_script.py << 'EOL'
+import os
+import time
+import sys
+from huggingface_hub import snapshot_download, HfApi
+import logging
+from tqdm.auto import tqdm
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def download_model():
+    try:
+        model_id = os.getenv("MODEL_ID")
+        cache_dir = os.getenv("HF_HOME")
+        token = os.getenv("HF_TOKEN")
+        
+        if not token:
+            logger.error("HF_TOKEN environment variable is required")
+            return False
+
+        logger.info(f"Starting download of {model_id}")
+        logger.info(f"Cache directory: {cache_dir}")
+        
+        # Get list of files to download
+        api = HfApi()
+        files = api.list_repo_files(model_id, token=token)
+        logger.info(f"Found {len(files)} files to download")
+        
+        # Download files
+        local_dir = snapshot_download(
+            repo_id=model_id,
+            local_dir=cache_dir,
+            token=token,
+            resume_download=True,
+            max_workers=1,  # Reduced for stability
+            tqdm_class=tqdm
+        )
+        
+        # Verify key files
+        key_files = [
+            "model_index.json",
+            "v3-5-large/diffusion_pytorch_model.safetensors",
+            "v3-5-large/config.json"
+        ]
+        
+        missing_files = []
+        for file in key_files:
+            full_path = os.path.join(local_dir, file)
+            if not os.path.exists(full_path):
+                missing_files.append(file)
+                logger.error(f"Missing file: {file}")
+        
+        if missing_files:
+            logger.error("Download incomplete - missing required files")
+            return False
+            
+        logger.info("Download and verification complete!")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error during download: {str(e)}")
+        return False
+
+if __name__ == "__main__":
+    success = download_model()
+    sys.exit(0 if success else 1)
+EOL
+
+# Verify HF_TOKEN is set
+if [ -z "${HF_TOKEN}" ]; then
+    echo "Error: HF_TOKEN environment variable is required"
+    echo "Please set it with: export HF_TOKEN=your_token_here"
+    exit 1
+fi
+
+# Create cache directory with proper permissions
+mkdir -p $CACHE_DIR
+chmod -R 777 $CACHE_DIR
+
+echo "Starting fresh download..."
+echo "Model ID: $MODEL_ID"
+echo "Cache directory: $(pwd)/$CACHE_DIR"
+
+# Run the download in a container
+docker run --rm \
+    -v $(pwd)/$CACHE_DIR:/root/.cache/huggingface \
+    -v $(pwd)/download_script.py:/app/download_script.py \
+    -e HF_HOME=/root/.cache/huggingface \
+    -e MODEL_ID=$MODEL_ID \
+    -e HF_TOKEN=${HF_TOKEN} \
+    --memory=4g \
+    --memory-swap=8g \
+    python:3.10-slim \
+    bash -c "
+        cd /app && \
+        echo 'Installing requirements...' && \
+        pip install --no-cache-dir --quiet huggingface-hub tqdm && \
+        echo 'Starting download...' && \
+        python3 download_script.py
+    "
+
+# Cleanup the temporary script
+rm download_script.py
+
+# Check if download was successful
+if [ $? -eq 0 ]; then
+    echo "Download successful! Verifying files..."
+    TOTAL_SIZE=$(du -sh "$CACHE_DIR/hub/models--stabilityai--stable-diffusion-3.5-large" | cut -f1)
+    echo "Total size: $TOTAL_SIZE"
+else
+    echo "Error: Download failed"
+    exit 1
+fi```
 
 ### ./document_project.sh
 ```sh
@@ -622,15 +1139,13 @@ echo "Documentation generated in $OUTPUT_FILE"```
 
 ### ./docker-compose.dev.yml
 ```yml
-version: '3.8'
-
 services:
   nginx:
     image: nginx:1.25-alpine
     ports:
-      - "8088:80"
+      - "127.0.0.1:5050:80"
     volumes:
-      - ./docker/nginx:/etc/nginx/conf.d
+      - ./docker/nginx:/etc/nginx/conf.d:ro
       - ./logs/nginx:/var/log/nginx
     depends_on:
       - sd-api
@@ -644,51 +1159,36 @@ services:
     expose:
       - "5000"
     volumes:
-      - ./app:/src/app
+      - ./app:/src/app:ro
       - ./generated_images:/src/generated_images
-      - model_cache:/root/.cache/huggingface  # Add this volume for model caching
+      - ./logs/sd-api:/src/logs
+      - model_cache:/root/.cache/huggingface
     environment:
-      - MODEL_ID=${MODEL_ID}
+      - MODEL_ID=stabilityai/stable-diffusion-3.5-large
       - NUM_WORKERS=1
       - PYTORCH_ENABLE_MPS_FALLBACK=1
       - LOG_LEVEL=debug
       - PYTHONPATH=/src
       - TRANSFORMERS_CACHE=/root/.cache/huggingface
       - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN}
+      - PYTHONUNBUFFERED=1
     networks:
       - sd-network
     restart: unless-stopped
-
-  prometheus:
-    image: prom/prometheus:v2.45.0
-    volumes:
-      - ./config/prometheus:/etc/prometheus
-      - prometheus_data:/prometheus
-    ports:
-      - "9091:9090"
-    networks:
-      - sd-network
-
-  grafana:
-    image: grafana/grafana:10.0.0
-    volumes:
-      - ./config/grafana/provisioning:/etc/grafana/provisioning
-      - grafana_data:/var/lib/grafana
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    ports:
-      - "3001:3000"
-    networks:
-      - sd-network
+    # Start with shell to debug
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "pip list &&
+       python -c 'import torch; print(f\"PyTorch version: {torch.__version__}\"); print(f\"CUDA available: {torch.cuda.is_available()}\"); print(f\"MPS available: {torch.backends.mps.is_available()}\")' &&
+       gunicorn --bind 0.0.0.0:5000 --timeout 600 --workers 1 --threads 4 --log-level debug --capture-output app.app:app"
 
 networks:
   sd-network:
     driver: bridge
 
 volumes:
-  prometheus_data:
-  grafana_data:
-  model_cache:  # Add this volume definition```
+  model_cache:```
 
 ### ./download-model.sh
 ```sh
@@ -696,10 +1196,14 @@ volumes:
 
 # Set variables
 CACHE_DIR=".cache/huggingface"
-MODEL_ID="runwayml/stable-diffusion-v1-5"
-DOWNLOAD_SCRIPT=$(cat << 'EOF'
+MODEL_ID=${MODEL_ID:-"stabilityai/stable-diffusion-3.5-large"}
+
+# Create Python download script
+cat > download_script.py << 'EOL'
 import os
-from huggingface_hub import snapshot_download
+import time
+import sys
+from huggingface_hub import snapshot_download, HfApi
 from huggingface_hub.utils import HfHubHTTPError
 import logging
 from tqdm.auto import tqdm
@@ -708,30 +1212,76 @@ from tqdm.auto import tqdm
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def get_model_size(model_id, token):
+    try:
+        api = HfApi()
+        model_info = api.model_info(model_id, token=token)
+        total_size = sum(s.size for s in model_info.siblings if s.size is not None)
+        return total_size
+    except Exception as e:
+        logger.warning(f"Couldn't get model size: {e}")
+        return None
+
+def format_size(size_bytes):
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.2f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.2f} TB"
+
 def download_model():
     try:
-        # Configure download parameters
-        model_id = os.getenv("MODEL_ID", "runwayml/stable-diffusion-v1-5")
+        model_id = os.getenv("MODEL_ID", "stabilityai/stable-diffusion-3.5-large")
         cache_dir = os.getenv("HF_HOME", "/root/.cache/huggingface")
+        token = os.getenv("HF_TOKEN")
         
+        if not token:
+            logger.error("HF_TOKEN environment variable is required")
+            return False
+
+        # Get model size before downloading
+        total_size = get_model_size(model_id, token)
+        if total_size:
+            logger.info(f"Total model size: {format_size(total_size)}")
+
         logger.info(f"Starting download of {model_id}")
         logger.info(f"Cache directory: {cache_dir}")
         
+        start_time = time.time()
+        
         # Download with progress bar and resume capability
-        snapshot_download(
+        local_dir = snapshot_download(
             repo_id=model_id,
             local_dir=cache_dir,
+            token=token,
             resume_download=True,
-            max_workers=4,  # Increase number of download workers
-            tqdm_class=tqdm
+            max_workers=4,
+            tqdm_class=tqdm,
+            force_download=False
         )
         
-        logger.info("Download completed successfully!")
+        duration = time.time() - start_time
+        
+        # Calculate downloaded size
+        total_downloaded = sum(
+            os.path.getsize(os.path.join(root, name))
+            for root, _, files in os.walk(local_dir)
+            for name in files
+        )
+        
+        logger.info(f"Download completed in {duration:.1f} seconds")
+        logger.info(f"Average speed: {format_size(total_downloaded/duration)}/s")
+        logger.info(f"Total downloaded: {format_size(total_downloaded)}")
         return True
         
+    except KeyboardInterrupt:
+        logger.info("\nDownload interrupted. You can resume later.")
+        return False
     except HfHubHTTPError as e:
         if "401" in str(e):
-            logger.error("Authentication error. Try setting the HF_TOKEN environment variable.")
+            logger.error("Authentication error. Please check your HF_TOKEN.")
+        elif "404" in str(e):
+            logger.error(f"Model {model_id} not found. Please check the model ID.")
         else:
             logger.error(f"Download failed: {str(e)}")
         return False
@@ -740,29 +1290,45 @@ def download_model():
         return False
 
 if __name__ == "__main__":
-    download_model()
-EOF
-)
+    success = download_model()
+    sys.exit(0 if success else 1)
+EOL
 
-# Create cache directory
+# Verify HF_TOKEN is set
+if [ -z "${HF_TOKEN}" ]; then
+    echo "Error: HF_TOKEN environment variable is required"
+    echo "Please set it with: export HF_TOKEN=your_token_here"
+    exit 1
+fi
+
+# Create cache directory with proper permissions
 mkdir -p $CACHE_DIR
+chmod -R 777 $CACHE_DIR
 
 echo "Starting model download process..."
+echo "Model ID: $MODEL_ID"
 echo "Cache directory: $(pwd)/$CACHE_DIR"
 
-# Run the download in a container
+# Run the download in a container with resource limits
 docker run --rm \
     -v $(pwd)/$CACHE_DIR:/root/.cache/huggingface \
+    -v $(pwd)/download_script.py:/app/download_script.py \
     -e HF_HOME=/root/.cache/huggingface \
     -e MODEL_ID=$MODEL_ID \
-    -e HF_TOKEN=${HF_TOKEN:-""} \
+    -e HF_TOKEN=${HF_TOKEN} \
+    --memory=4g \
+    --memory-swap=8g \
     python:3.10-slim \
     bash -c "
+        cd /app && \
         echo 'Installing requirements...' && \
         pip install --no-cache-dir --quiet huggingface-hub tqdm && \
         echo 'Starting download...' && \
-        python3 -c '$DOWNLOAD_SCRIPT'
+        python3 download_script.py
     "
+
+# Cleanup the temporary script
+rm download_script.py
 
 # Check if download was successful
 if [ $? -eq 0 ]; then
@@ -772,7 +1338,9 @@ if [ $? -eq 0 ]; then
     # Verify the download
     echo "Verifying downloaded files..."
     FILE_COUNT=$(find $CACHE_DIR -type f | wc -l)
+    TOTAL_SIZE=$(du -sh $CACHE_DIR | cut -f1)
     echo "Found $FILE_COUNT files in cache directory"
+    echo "Total size: $TOTAL_SIZE"
     
     if [ $FILE_COUNT -gt 0 ]; then
         echo "Download verification successful!"
@@ -803,7 +1371,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-MODEL_ID = "runwayml/stable-diffusion-v1-5"
+# MODEL_ID = "runwayml/stable-diffusion-v1-5"
+# MODEL_ID = os.getenv("MODEL_ID", MODEL_ID)
+MODEL_ID = "stabilityai/stable-diffusion-3.5-large"
 CACHE_DIR = os.path.expanduser("~/.cache/huggingface/hub")
 CONCURRENT_DOWNLOADS = 8
 
@@ -905,8 +1475,6 @@ esac```
 
 ### ./docker-compose.prod.yml
 ```yml
-version: '3.8'
-
 services:
   nginx:
     image: nginx:1.25-alpine
@@ -944,7 +1512,6 @@ services:
       - sd-network
     restart: unless-stopped
 
-  # ... rest of services remain the same as dev ...
 
 networks:
   sd-network:

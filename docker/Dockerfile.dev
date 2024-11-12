@@ -12,13 +12,21 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first to leverage Docker cache
-COPY requirements.txt .
-
-# Install Python dependencies with checks
+# Install Python dependencies with specific versions
 RUN pip3 install --no-cache-dir --upgrade pip && \
-    pip3 install --no-cache-dir -r requirements.txt && \
-    pip check && \
+    pip3 install --no-cache-dir \
+    torch==2.1.0 \
+    torchvision==0.16.0 \
+    diffusers==0.24.0 \
+    transformers==4.35.2 \
+    accelerate==0.24.1 \
+    safetensors==0.4.0 \
+    huggingface-hub==0.19.4 \
+    flask==3.0.0 \
+    gunicorn==21.2.0 \
+    Pillow==10.1.0 \
+    numpy==1.26.2 \
+    && pip check && \
     pip list
 
 # Copy application code

@@ -1,13 +1,23 @@
 import os
 from flask import Flask, request, jsonify, send_file
-from diffusers import StableDiffusionPipeline
+from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler
 import torch
 from PIL import Image
 import io
 import uuid
 import time
+import threading
+import logging
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = app.logger
+
+# Global variables
+pipe = None
+model_loading = False
+model_load_error = None
+model_load_progress = {'status': 'Not started', 'progress': 0}
 
 def get_device_and_dtype():
     if torch.backends.mps.is_available() and not os.getenv('FORCE_CPU', False):
@@ -16,51 +26,83 @@ def get_device_and_dtype():
         return "cuda", torch.float32
     return "cpu", torch.float32
 
-# Initialize the model globally
-device, dtype = get_device_and_dtype()
-model_id = os.getenv('MODEL_ID', "runwayml/stable-diffusion-v1-5")
-OUTPUT_DIR = "generated_images"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-def load_model():
-    """Load the Stable Diffusion model with appropriate settings"""
+def load_model_in_thread():
+    global pipe, model_loading, model_load_error, model_load_progress
     try:
-        app.logger.info(f"Loading model on device: {device} with dtype: {dtype}")
+        device, dtype = get_device_and_dtype()
+        logger.info(f"Loading model on device: {device} with dtype: {dtype}")
+        model_loading = True
+        model_load_progress['status'] = 'Loading'
         
-        pipe = StableDiffusionPipeline.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            use_auth_token=os.getenv('HF_TOKEN')
-        )
+        # Get model ID and cache dir
+        model_id = os.getenv('MODEL_ID', "runwayml/stable-diffusion-v1-5")
+        cache_dir = os.getenv('HF_HOME', "/root/.cache/huggingface")
         
+        # First try loading with local files
+        try:
+            logger.info("Attempting to load model from local cache...")
+            pipe = StableDiffusionPipeline.from_pretrained(
+                model_id,
+                torch_dtype=dtype,
+                use_auth_token=os.getenv('HF_TOKEN'),
+                safety_checker=None,  # Disable safety checker for memory
+                local_files_only=True,
+                low_cpu_mem_usage=True,
+                variant="fp16" if dtype == torch.float16 else None,
+                use_safetensors=True,
+                cache_dir=cache_dir
+            )
+        except Exception as local_error:
+            logger.warning(f"Local load failed: {str(local_error)}")
+            logger.info("Attempting to download model...")
+            pipe = StableDiffusionPipeline.from_pretrained(
+                model_id,
+                torch_dtype=dtype,
+                use_auth_token=os.getenv('HF_TOKEN'),
+                safety_checker=None,  # Disable safety checker for memory
+                low_cpu_mem_usage=True,
+                variant="fp16" if dtype == torch.float16 else None,
+                use_safetensors=True,
+                cache_dir=cache_dir
+            )
+        
+        # Move to device
         pipe = pipe.to(device)
         
-        # Enable memory efficient attention if available
+        # Enable optimizations
         if hasattr(pipe, 'enable_attention_slicing'):
-            pipe.enable_attention_slicing()
-            
-        return pipe
+            pipe.enable_attention_slicing(slice_size="max")
+        
+        if hasattr(pipe, 'enable_vae_slicing'):
+            pipe.enable_vae_slicing()
+        
+        if hasattr(pipe, 'enable_model_cpu_offload'):
+            pipe.enable_model_cpu_offload()
+        
+        # Use DPM++ 2M scheduler for better quality
+        pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+        
+        model_loading = False
+        model_load_progress['status'] = 'Ready'
+        model_load_progress['progress'] = 100
+        logger.info("Model loaded successfully!")
+        
     except Exception as e:
-        app.logger.error(f"Error loading model: {str(e)}")
-        raise
+        error_msg = f"Error loading model: {str(e)}"
+        logger.error(error_msg)
+        model_load_error = error_msg
+        model_loading = False
+        model_load_progress['status'] = 'Error'
 
-# Load the pipeline
-try:
-    pipe = load_model()
-    app.logger.info(f"Model loaded successfully on device: {device}")
-except Exception as e:
-    app.logger.error(f"Failed to load model: {str(e)}")
-    pipe = None
+# Start model loading in background
+threading.Thread(target=load_model_in_thread, daemon=True).start()
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint with model status"""
-    request_info = {
-        'headers': dict(request.headers),
-        'remote_addr': request.remote_addr,
-        'path': request.path,
-        'method': request.method
-    }
+    """Health check endpoint with detailed status"""
+    global pipe, model_loading, model_load_error, model_load_progress
+    
+    device, _ = get_device_and_dtype()
     
     memory_info = {}
     if device == "cuda" and torch.cuda.is_available():
@@ -68,19 +110,48 @@ def health_check():
             'gpu_memory_allocated': torch.cuda.memory_allocated(),
             'gpu_memory_reserved': torch.cuda.memory_reserved()
         }
+    elif device == "cpu":
+        import psutil
+        memory = psutil.Process().memory_info()
+        memory_info = {
+            'rss': memory.rss,
+            'vms': memory.vms,
+            'shared': memory.shared
+        }
     
-    return jsonify({
-        'status': 'healthy' if pipe is not None else 'degraded',
-        'model': model_id,
+    status = {
+        'status': 'loading' if model_loading else 'error' if model_load_error else 'ready' if pipe else 'not_initialized',
+        'model': os.getenv('MODEL_ID', "runwayml/stable-diffusion-v1-5"),
         'device': device,
         'memory_info': memory_info,
-        'request_info': request_info
-    })
+        'loading_progress': model_load_progress,
+        'error': model_load_error
+    }
+    
+    # Return 503 if still loading or error
+    if model_loading:
+        return jsonify(status), 503
+    elif model_load_error:
+        return jsonify(status), 500
+    
+    return jsonify(status)
 
 @app.route('/generate', methods=['POST'])
 def generate_image():
+    """Generate image endpoint"""
+    global pipe, model_loading, model_load_error
+    
+    if model_loading:
+        return jsonify({
+            'error': 'Model is still loading', 
+            'progress': model_load_progress
+        }), 503
+        
+    if model_load_error:
+        return jsonify({'error': f'Model failed to load: {model_load_error}'}), 500
+        
     if pipe is None:
-        return jsonify({'error': 'Model not loaded'}), 500
+        return jsonify({'error': 'Model not loaded'}), 503
 
     try:
         data = request.get_json()
@@ -89,12 +160,11 @@ def generate_image():
         if not prompt:
             return jsonify({'error': 'No prompt provided'}), 400
         
-        # Optional parameters
         negative_prompt = data.get('negative_prompt', None)
         num_inference_steps = int(data.get('num_inference_steps', 50))
         guidance_scale = float(data.get('guidance_scale', 7.5))
         
-        app.logger.info(f"Generating image for prompt: {prompt}")
+        logger.info(f"Generating image for prompt: {prompt}")
         generation_start = time.time()
         
         # Generate the image
@@ -107,11 +177,11 @@ def generate_image():
             ).images[0]
         
         generation_time = time.time() - generation_start
-        app.logger.info(f"Image generated in {generation_time:.2f} seconds")
+        logger.info(f"Image generated in {generation_time:.2f} seconds")
         
         # Save the image
         filename = f"{uuid.uuid4()}.png"
-        filepath = os.path.join(OUTPUT_DIR, filename)
+        filepath = os.path.join("generated_images", filename)
         image.save(filepath)
         
         # Prepare response
@@ -127,7 +197,7 @@ def generate_image():
         )
         
     except Exception as e:
-        app.logger.error(f"Error generating image: {str(e)}")
+        logger.error(f"Error generating image: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':

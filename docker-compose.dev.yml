@@ -1,5 +1,3 @@
-version: '3.7'
-
 services:
   nginx:
     image: nginx:1.25-alpine
@@ -24,6 +22,7 @@ services:
       - ./generated_images:/src/generated_images
       - ./logs/sd-api:/src/logs
       - model_cache:/root/.cache/huggingface
+      - ./gunicorn.conf.py:/src/gunicorn.conf.py:ro
     environment:
       - MODEL_ID=stabilityai/stable-diffusion-3.5-large
       - NUM_WORKERS=1
@@ -37,12 +36,8 @@ services:
     networks:
       - sd-network
     restart: unless-stopped
-    # Start with shell to debug
-    entrypoint: ["/bin/sh", "-c"]
-    command: |
-      "pip list &&
-       python -c 'import torch; print(f\"PyTorch version: {torch.__version__}\"); print(f\"CUDA available: {torch.cuda.is_available()}\"); print(f\"MPS available: {torch.backends.mps.is_available()}\")' &&
-       gunicorn --bind 0.0.0.0:5000 --timeout 600 --workers 1 --threads 4 --log-level debug --capture-output app.app:app"
+    shm_size: 1gb
+    command: gunicorn --config /src/gunicorn.conf.py app.app:app
 
 networks:
   sd-network:

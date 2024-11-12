@@ -1,0 +1,15 @@
+bind = "0.0.0.0:5000"
+workers = 1
+threads = 4
+worker_class = "gthread"
+timeout = 1800  # 30 minutes
+graceful_timeout = 300  # 5 minutes
+keepalive = 5
+max_requests = 100
+max_requests_jitter = 10
+worker_tmp_dir = "/dev/shm"  # Use memory for temp files
+log_level = "debug"
+capture_output = True
+enable_stdio_inheritance = True
+timeout_start = 1800  # 30 minutes for startup
+worker_connections = 100
